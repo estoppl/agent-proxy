@@ -103,10 +103,9 @@ pub fn generate_html_report(ledger: &LocalLedger) -> Result<String> {
   </div>
 
   <div class="disclaimer">
-    FOR VISIBILITY ONLY — NOT LEGALLY DEFENSIBLE. This report is generated from a local SQLite
-    database and has not been written to immutable WORM storage or independently verified. It is
-    intended for internal review and development use. For legally defensible audit records suitable
-    for SEC, FINRA, or EU AI Act submissions, use the Estoppl cloud ledger.
+    For internal review. This report is generated from a local audit log. For immutable WORM storage
+    and regulatory evidence packs (SEC 17a-4, FINRA, EU AI Act), see the Estoppl cloud ledger at
+    estoppl.ai.
   </div>
 
   <div class="stats">

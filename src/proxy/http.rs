@@ -47,7 +47,7 @@ impl ProxyState {
         latency_ms: i64,
     ) {
         let ledger = self.ledger.lock().unwrap();
-        if let Err(e) = super::log_event(
+        match super::log_event(
             &ledger,
             &self.key_manager,
             &self.session_id,
@@ -61,7 +61,8 @@ impl ProxyState {
             decision,
             latency_ms,
         ) {
-            tracing::error!(error = %e, "Failed to log event");
+            Ok(_event_id) => {}
+            Err(e) => tracing::error!(error = %e, "Failed to log event"),
         }
     }
 }

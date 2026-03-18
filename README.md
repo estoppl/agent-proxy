@@ -47,9 +47,11 @@ brew install estoppl
 
 **npm** (any platform with Node.js):
 ```bash
-npx estoppl
-# or install globally
+# Install globally (recommended for regular use)
 npm install -g estoppl
+
+# Or run without installing
+npx estoppl
 ```
 
 **Cargo** (Rust toolchain):
@@ -295,7 +297,7 @@ src/
 
 ## Roadmap
 
-### Current (v0.14.0)
+### Current (v0.15.0)
 - [x] stdio proxy mode (transparent MCP interception)
 - [x] HTTP/SSE proxy mode (MCP Streamable HTTP transport — POST, GET SSE, DELETE)
 - [x] JSON-RPC batch support (mixed blocked + allowed in same batch)

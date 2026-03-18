@@ -7,17 +7,13 @@ use uuid::Uuid;
 
 use crate::identity::KeyManager;
 use crate::ledger::{LocalLedger, sha256_hex};
-use crate::mcp::{JsonRpcRequest, JsonRpcResponse, ToolCallParams};
+use crate::mcp::{JsonRpcRequest, JsonRpcResponse};
 use crate::policy::{PolicyDecision, PolicyEngine};
 
 /// Tracks an in-flight tools/call request so we can log the response too.
 struct PendingCall {
     tool_name: String,
-    #[allow(dead_code)]
-    tool_params: Option<ToolCallParams>,
-    input_hash: String,
     start: std::time::Instant,
-    decision: PolicyDecision,
 }
 
 /// Run the stdio proxy: sits between the agent host and the upstream MCP server process.
@@ -58,10 +54,12 @@ pub async fn run_stdio_proxy(
             )
         })?;
 
-    let mut child_stdin = child
-        .stdin
-        .take()
-        .context("Failed to capture child stdin")?;
+    let mut child_stdin = Some(
+        child
+            .stdin
+            .take()
+            .context("Failed to capture child stdin")?,
+    );
     let child_stdout = child
         .stdout
         .take()
@@ -77,14 +75,27 @@ pub async fn run_stdio_proxy(
     let mut host_line = String::new();
     let mut upstream_line = String::new();
 
+    let mut stdin_closed = false;
+
     loop {
+        // If stdin is closed and no pending calls, we're done.
+        if stdin_closed && pending.is_empty() {
+            break;
+        }
+
         tokio::select! {
             // Read from agent host (our stdin).
-            result = host_stdin.read_line(&mut host_line) => {
+            result = host_stdin.read_line(&mut host_line), if !stdin_closed => {
                 let n = result.context("Failed to read from stdin")?;
                 if n == 0 {
-                    tracing::info!("Agent host closed stdin");
-                    break;
+                    tracing::info!("Agent host closed stdin — draining {} in-flight calls", pending.len());
+                    stdin_closed = true;
+                    // Close upstream stdin so the server knows no more input is coming.
+                    child_stdin.take();
+                    if pending.is_empty() {
+                        break;
+                    }
+                    continue;
                 }
 
                 let trimmed = host_line.trim();
@@ -127,7 +138,7 @@ pub async fn run_stdio_proxy(
                             );
                             let err_json = serde_json::to_string(&err_resp)?;
 
-                            // Log the blocked call.
+                            // Log the blocked call immediately.
                             super::log_event(
                                 ledger,
                                 key_manager,
@@ -151,15 +162,28 @@ pub async fn run_stdio_proxy(
                             continue;
                         }
                         _ => {
-                            // ALLOW or HUMAN_REQUIRED — forward to upstream, track it.
+                            // ALLOW or HUMAN_REQUIRED — log immediately at interception,
+                            // then forward to upstream and track for latency update.
+                            let _event_id = super::log_event(
+                                ledger,
+                                key_manager,
+                                &session_id,
+                                agent_id,
+                                agent_version,
+                                authorized_by,
+                                &tool_name,
+                                "stdio",
+                                &input_hash,
+                                "",
+                                &decision,
+                                0,
+                            )?;
+
                             pending.insert(
                                 req_id_key,
                                 PendingCall {
                                     tool_name,
-                                    tool_params,
-                                    input_hash,
                                     start: std::time::Instant::now(),
-                                    decision: decision.clone(),
                                 },
                             );
                         }
@@ -167,8 +191,10 @@ pub async fn run_stdio_proxy(
                 }
 
                 // Forward to upstream (for non-blocked requests and non-tool-call messages).
-                child_stdin.write_all(host_line.as_bytes()).await?;
-                child_stdin.flush().await?;
+                if let Some(ref mut stdin) = child_stdin {
+                    stdin.write_all(host_line.as_bytes()).await?;
+                    stdin.flush().await?;
+                }
                 host_line.clear();
             }
 
@@ -191,28 +217,12 @@ pub async fn run_stdio_proxy(
                         .unwrap_or_default();
 
                     if let Some(call) = pending.remove(&resp_id_key) {
-                        let output_hash = sha256_hex(trimmed.as_bytes());
                         let latency_ms = call.start.elapsed().as_millis() as i64;
-
-                        super::log_event(
-                            ledger,
-                            key_manager,
-                            &session_id,
-                            agent_id,
-                            agent_version,
-                            authorized_by,
-                            &call.tool_name,
-                            "stdio",
-                            &call.input_hash,
-                            &output_hash,
-                            &call.decision,
-                            latency_ms,
-                        )?;
 
                         tracing::info!(
                             tool = call.tool_name,
                             latency_ms = latency_ms,
-                            "Logged tool call response"
+                            "Tool call completed"
                         );
                     }
                 }

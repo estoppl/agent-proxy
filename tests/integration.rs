@@ -145,7 +145,7 @@ fn test_report_empty_db() {
 
     let html = std::fs::read_to_string(report_path).unwrap();
     assert!(html.contains("Estoppl"));
-    assert!(html.contains("FOR VISIBILITY ONLY"));
+    assert!(html.contains("For internal review"));
 }
 
 #[test]

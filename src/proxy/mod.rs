@@ -33,7 +33,7 @@ pub fn log_event(
     output_hash: &str,
     decision: &PolicyDecision,
     latency_ms: i64,
-) -> Result<()> {
+) -> Result<String> {
     let prev_hash = ledger.last_event_hash()?;
     let sequence_number = ledger.next_sequence_number()?;
 
@@ -61,6 +61,7 @@ pub fn log_event(
     event.event_hash = event.compute_hash();
     event.signature = key_manager.sign(event.event_hash.as_bytes());
 
+    let event_id = event.event_id.clone();
     ledger.append(&event)?;
-    Ok(())
+    Ok(event_id)
 }
