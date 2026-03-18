@@ -149,6 +149,105 @@ fn test_report_empty_db() {
 }
 
 #[test]
+fn test_stats_empty_db() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    Command::new(estoppl_bin())
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let output = Command::new(estoppl_bin())
+        .args(["stats"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("No events recorded yet"));
+}
+
+#[test]
+fn test_report_custom_output_path() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    Command::new(estoppl_bin())
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let output = Command::new(estoppl_bin())
+        .args(["report", "--output", "custom-report.html"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(dir.path().join("custom-report.html").exists());
+}
+
+#[test]
+fn test_audit_filters() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    Command::new(estoppl_bin())
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    // Filter by tool — should return no events (empty db)
+    let output = Command::new(estoppl_bin())
+        .args(["audit", "--tool", "stripe.create_payment"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("No events found"));
+
+    // Filter by decision
+    let output = Command::new(estoppl_bin())
+        .args(["audit", "--decision", "block"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    // Filter by since
+    let output = Command::new(estoppl_bin())
+        .args(["audit", "--since", "2026-01-01T00:00:00Z"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_help_output() {
+    let output = Command::new(estoppl_bin())
+        .args(["--help"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("init"));
+    assert!(stdout.contains("start"));
+    assert!(stdout.contains("start-http"));
+    assert!(stdout.contains("audit"));
+    assert!(stdout.contains("report"));
+    assert!(stdout.contains("tail"));
+    assert!(stdout.contains("stats"));
+}
+
+#[test]
 fn test_stdio_proxy_with_fake_server() {
     let dir = tempfile::TempDir::new().unwrap();
 
