@@ -96,10 +96,7 @@ fn wrap_config(config: &mut Value) -> (usize, usize) {
         let mut original = serde_json::Map::new();
         original.insert("command".to_string(), Value::String(original_cmd.clone()));
         original.insert("args".to_string(), Value::Array(original_args.clone()));
-        obj.insert(
-            "_estoppl_original".to_string(),
-            Value::Object(original),
-        );
+        obj.insert("_estoppl_original".to_string(), Value::Object(original));
 
         // Build new args: ["start", "--upstream-cmd", original_cmd, "--upstream-args", ...original_args]
         let mut new_args: Vec<Value> = vec![
@@ -201,8 +198,9 @@ pub fn run_wrap(dry_run: bool, restore: bool, client_filter: Option<&str>) -> Re
             // Create backup before wrapping
             let backup_path = path.with_extension("json.estoppl-backup");
             if !backup_path.exists() && !dry_run {
-                std::fs::copy(path, &backup_path)
-                    .with_context(|| format!("Failed to create backup at {}", backup_path.display()))?;
+                std::fs::copy(path, &backup_path).with_context(|| {
+                    format!("Failed to create backup at {}", backup_path.display())
+                })?;
             }
 
             let (wrapped, skipped) = wrap_config(&mut config);
@@ -277,7 +275,10 @@ mod tests {
 
         let stripe = &config["mcpServers"]["stripe"];
         assert_eq!(stripe["_estoppl_wrapped"], true);
-        assert!(stripe["command"].as_str().unwrap().contains("estoppl") || stripe["command"] == "estoppl");
+        assert!(
+            stripe["command"].as_str().unwrap().contains("estoppl")
+                || stripe["command"] == "estoppl"
+        );
 
         let args: Vec<&str> = stripe["args"]
             .as_array()
@@ -323,9 +324,11 @@ mod tests {
             config["mcpServers"]["stripe"]["args"],
             original["mcpServers"]["stripe"]["args"]
         );
-        assert!(config["mcpServers"]["stripe"]
-            .get("_estoppl_wrapped")
-            .is_none());
+        assert!(
+            config["mcpServers"]["stripe"]
+                .get("_estoppl_wrapped")
+                .is_none()
+        );
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::get,
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
