@@ -91,6 +91,18 @@ estoppl start-http --upstream-url http://localhost:3000/mcp
 # See what your agent has been doing
 estoppl audit -n 50
 
+# Verify the audit chain hasn't been tampered with
+estoppl audit --verify
+
+# Filter audit events
+estoppl audit --tool stripe.create_payment --decision block --since 2026-03-01T00:00:00Z
+
+# Live-stream tool calls as they happen
+estoppl tail
+
+# View tool call statistics — volume, latency, per-tool breakdown
+estoppl stats
+
 # Generate an HTML report
 estoppl report
 ```
@@ -283,8 +295,8 @@ src/
 - [x] `--sync` flag — stream signed events to cloud endpoint (bridge to cloud dashboard)
 
 ### Next (v0.5)
-- [ ] Homebrew tap (`brew install estoppl`)
-- [ ] npm wrapper package (`npx estoppl` — binary distribution, no Rust required)
+- [x] Homebrew tap (`brew install estoppl`)
+- [x] npm wrapper package (`npx estoppl` — binary distribution, no Rust required)
 - [ ] `estoppl wrap` — auto-detect and wrap existing MCP client configs (Claude Desktop, Cursor) in one command
 - [ ] Blocking human review — `HUMAN_REQUIRED` tools pause and wait for explicit approval before forwarding
 - [ ] `estoppl dashboard` — local web UI for browsing audit events, guardrail hits, and agent activity
