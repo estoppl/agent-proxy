@@ -14,32 +14,41 @@ fn detect_clients() -> Vec<McpClient> {
         Err(_) => return vec![],
     };
 
-    #[allow(unused_mut)]
-    let mut clients = vec![
-        McpClient {
-            name: "Cursor",
-            config_path: home.join(".cursor/mcp.json"),
-        },
-        McpClient {
-            name: "Windsurf",
-            config_path: home.join(".codeium/windsurf/mcp_config.json"),
-        },
-    ];
+    fn claude_desktop_path(home: &std::path::Path) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            Some(home.join("Library/Application Support/Claude/claude_desktop_config.json"))
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("APPDATA")
+                .ok()
+                .map(|a| PathBuf::from(a).join("Claude/claude_desktop_config.json"))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = home;
+            None
+        }
+    }
 
-    // Claude Desktop — platform-specific path
-    #[cfg(target_os = "macos")]
-    clients.push(McpClient {
-        name: "Claude Desktop",
-        config_path: home.join("Library/Application Support/Claude/claude_desktop_config.json"),
-    });
+    let mut clients = Vec::new();
 
-    #[cfg(target_os = "windows")]
-    if let Ok(appdata) = std::env::var("APPDATA") {
+    if let Some(path) = claude_desktop_path(&home) {
         clients.push(McpClient {
             name: "Claude Desktop",
-            config_path: PathBuf::from(appdata).join("Claude/claude_desktop_config.json"),
+            config_path: path,
         });
     }
+
+    clients.push(McpClient {
+        name: "Cursor",
+        config_path: home.join(".cursor/mcp.json"),
+    });
+    clients.push(McpClient {
+        name: "Windsurf",
+        config_path: home.join(".codeium/windsurf/mcp_config.json"),
+    });
 
     clients
 }
