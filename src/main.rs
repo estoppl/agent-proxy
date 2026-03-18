@@ -138,6 +138,13 @@ enum Commands {
         client: Option<String>,
     },
 
+    /// Restore original MCP client configs (alias for `wrap --restore`).
+    Unwrap {
+        /// Only unwrap a specific client (claude, cursor, windsurf).
+        #[arg(long)]
+        client: Option<String>,
+    },
+
     /// Open the local web dashboard for browsing audit events.
     Dashboard {
         /// Port to serve the dashboard on.
@@ -193,6 +200,7 @@ async fn main() -> Result<()> {
             restore,
             client,
         } => wrap::run_wrap(dry_run, restore, client.as_deref())?,
+        Commands::Unwrap { client } => wrap::run_wrap(false, true, client.as_deref())?,
         Commands::Dashboard { port, config } => cmd_dashboard(port, &config).await?,
     }
 

@@ -17,7 +17,7 @@ This is the OSS layer of a two-layer architecture:
 - **Storage**: Local SQLite with WAL mode, hash-chained events
 - **Signing**: Ed25519 via ed25519-dalek
 - **HTTP framework**: axum (for HTTP proxy mode + dashboard)
-- **CLI**: clap with subcommands: `init`, `start`, `start-http`, `audit`, `report`, `tail`, `stats`, `wrap`, `dashboard`
+- **CLI**: clap with subcommands: `init`, `start`, `start-http`, `audit`, `report`, `tail`, `stats`, `wrap`, `unwrap`, `dashboard`
 - **Distribution**: GitHub Releases, crates.io (`cargo install estoppl`), npm (`npx estoppl`), Homebrew (`brew install estoppl`)
 
 ## Source layout
@@ -66,18 +66,18 @@ src/
 
 ```bash
 cargo build          # builds the `estoppl` binary
-cargo test           # runs all 77 tests (unit + integration)
+cargo test           # runs all 82 tests (unit + integration)
 cargo run -- init    # test the init command
 ```
 
 ### Test coverage
 
-- **Unit tests** (65): inline `#[cfg(test)]` modules in each source file
+- **Unit tests** (70): inline `#[cfg(test)]` modules in each source file
   - `mcp/types.rs` — JSON-RPC parsing, tool call detection, serialization
   - `identity/mod.rs` — key generation, persistence, sign/verify roundtrip
   - `ledger/event.rs` — hash determinism, field sensitivity, chain linking, sequence number tamper-evidence
   - `ledger/local.rs` — append/query, chain verification (intact/broken/tampered), filters, stats, tail, sequence numbers, sync cursor reset
-  - `policy/mod.rs` — block lists, wildcards, human review, amount thresholds, rate limiting
+  - `policy/mod.rs` — allow lists, block lists, wildcards, block-overrides-allow, human review, amount thresholds, rate limiting
   - `proxy/http.rs` — response merging (single + blocked, batch + blocked, empty blocked), policy in batch context
   - `sync/mod.rs` — sync cursor, chain metadata, gap reconciliation, network partition + reconnect, batch hash, response parsing
   - `wrap/mod.rs` — config transformation, idempotency, restore, HTTP-only skip, empty config

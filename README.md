@@ -110,6 +110,7 @@ estoppl report
 estoppl wrap              # wraps Claude Desktop, Cursor, Windsurf configs
 estoppl wrap --dry-run    # preview changes without modifying
 estoppl wrap --restore    # restore original configs from backup
+estoppl unwrap            # same as wrap --restore
 
 # Open the local web dashboard
 estoppl dashboard         # http://127.0.0.1:4200
@@ -171,6 +172,10 @@ id = "my-agent"
 version = "0.1.0"
 
 [rules]
+# Allow only these tools (empty = allow all). Supports wildcards.
+# allow_tools = ["read_portfolio", "get_balance", "stripe.list_*"]
+allow_tools = []
+
 # Block these tools entirely — they never reach the MCP server
 block_tools = []
 
@@ -200,7 +205,9 @@ db_path = ".estoppl/events.db"
 
 ### Guardrails
 
-**Block tools** — tool calls matching these names are rejected before reaching the upstream server. The agent gets a JSON-RPC error. Supports wildcards: `"stripe.*"` blocks all Stripe tools.
+**Allow tools** — if set, only these tools are permitted. Everything else is blocked. Use this for a secure-by-default posture: `allow_tools = ["read_portfolio", "get_balance"]`. Supports wildcards: `"read.*"` allows all read tools. Block list still takes priority over allow list.
+
+**Block tools** — tool calls matching these names are rejected before reaching the upstream server. The agent gets a JSON-RPC error. Supports wildcards: `"stripe.*"` blocks all Stripe tools. Block list overrides allow list.
 
 **Human review** — tool calls go through but are flagged as `HUMAN_REQUIRED` in the audit log. Use this for sensitive operations you want visibility into.
 
@@ -292,10 +299,10 @@ src/
 - [x] stdio proxy mode (transparent MCP interception)
 - [x] HTTP/SSE proxy mode (MCP Streamable HTTP transport — POST, GET SSE, DELETE)
 - [x] JSON-RPC batch support (mixed blocked + allowed in same batch)
-- [x] Guardrails: tool block/allow lists, amount thresholds, human review flags
+- [x] Guardrails: allow lists, block lists (with wildcards), amount thresholds, human review flags
 - [x] Ed25519 event signing
 - [x] Hash-chained local SQLite audit log
-- [x] CLI: `init`, `start`, `start-http`, `audit`, `report`, `tail`, `stats`, `wrap`, `dashboard`
+- [x] CLI: `init`, `start`, `start-http`, `audit`, `report`, `tail`, `stats`, `wrap`, `unwrap`, `dashboard`
 - [x] HTML activity report
 - [x] `estoppl tail` — live-stream tool calls in your terminal as they happen
 - [x] Rate limiting / circuit breaker — block tools called more than N times per minute
@@ -309,13 +316,13 @@ src/
 - [x] `estoppl dashboard` — local web UI for browsing audit events, guardrail hits, and chain verification
 
 ### Future (cloud / 3P integrations)
-- [ ] Blocking human review — `HUMAN_REQUIRED` tools pause and wait for explicit approval (requires dashboard approval flow or webhook)
-- [ ] OPA (Open Policy Agent) integration for enterprise policy management
+- [ ] Blocking human review — tools pause and wait for explicit approval via dashboard or webhook
 - [ ] Cloud dashboard with real-time event feed and alerting
-- [ ] Cloud ledger with immutable WORM storage for regulated industries
+- [ ] Cloud ledger with immutable WORM storage for regulated industries (SEC 17a-4)
+- [ ] OPA (Open Policy Agent) integration for enterprise policy management
+- [ ] Framework-agnostic compliance report templates (EU AI Act, SEC, SOC 2)
 - [ ] OpenAI function calling interception (beyond MCP)
 - [ ] A2A (Agent-to-Agent) protocol interception for multi-agent delegation chains
-- [ ] Framework-agnostic compliance report templates (EU AI Act, SEC, SOC 2)
 - [ ] Kubernetes sidecar deployment
 - [ ] Cross-org agent trust verification
 

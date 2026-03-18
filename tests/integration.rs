@@ -246,6 +246,7 @@ fn test_help_output() {
     assert!(stdout.contains("tail"));
     assert!(stdout.contains("stats"));
     assert!(stdout.contains("wrap"));
+    assert!(stdout.contains("unwrap"));
     assert!(stdout.contains("dashboard"));
 }
 
