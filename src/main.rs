@@ -260,7 +260,8 @@ async fn cmd_start(
 
     // Start cloud sync background task if --sync is enabled.
     let _sync_handle = maybe_start_sync(sync_enabled, &config)?;
-    let _policy_handle = maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
+    let _policy_handle =
+        maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
 
     proxy::run_stdio_proxy(
         upstream_cmd,
@@ -299,7 +300,8 @@ async fn cmd_start_http(
 
     // Start cloud sync background task if --sync is enabled.
     let _sync_handle = maybe_start_sync(sync_enabled, &config)?;
-    let _policy_handle = maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
+    let _policy_handle =
+        maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
 
     proxy::run_http_proxy(
         listen_addr,

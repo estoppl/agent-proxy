@@ -475,9 +475,7 @@ impl PolicySyncer {
 
     /// Poll the cloud for the current policy. Returns true if the policy was updated.
     async fn poll_policy(&mut self) -> Result<bool> {
-        let mut req = self
-            .http_client
-            .get(&self.config.policy_endpoint);
+        let mut req = self.http_client.get(&self.config.policy_endpoint);
 
         if let Some(api_key) = &self.config.api_key {
             req = req.header("Authorization", format!("Bearer {}", api_key));
