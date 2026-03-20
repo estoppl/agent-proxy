@@ -33,7 +33,7 @@ struct ProxyState {
     session_id: String,
     key_manager: KeyManager,
     ledger: Mutex<LocalLedger>,
-    policy: PolicyEngine,
+    policy: Arc<PolicyEngine>,
     http_client: reqwest::Client,
 }
 
@@ -80,7 +80,7 @@ pub async fn run_http_proxy(
     authorized_by: &str,
     key_manager: KeyManager,
     ledger: LocalLedger,
-    policy: PolicyEngine,
+    policy: Arc<PolicyEngine>,
 ) -> Result<()> {
     let session_id = Uuid::now_v7().to_string();
 

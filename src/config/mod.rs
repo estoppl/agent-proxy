@@ -68,6 +68,9 @@ pub struct LedgerConfig {
     /// API key for cloud ledger (future use).
     #[serde(default)]
     pub cloud_api_key: Option<String>,
+    /// Organization ID for cloud policy sync.
+    #[serde(default)]
+    pub org_id: Option<String>,
 }
 
 impl Default for LedgerConfig {
@@ -76,6 +79,7 @@ impl Default for LedgerConfig {
             db_path: default_db_path(),
             cloud_endpoint: None,
             cloud_api_key: None,
+            org_id: None,
         }
     }
 }

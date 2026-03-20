@@ -385,6 +385,131 @@ pub fn shutdown_channel() -> (watch::Sender<bool>, watch::Receiver<bool>) {
     watch::channel(false)
 }
 
+/// Configuration for the policy syncer.
+#[derive(Debug, Clone)]
+pub struct PolicySyncConfig {
+    /// Base URL of the cloud API (e.g. "http://localhost:8080").
+    /// The policy endpoint is derived as `{base_url}/v1/policy/{org_id}`.
+    pub policy_endpoint: String,
+    /// API key for authenticating with the cloud.
+    pub api_key: Option<String>,
+    /// Polling interval in seconds.
+    pub interval_secs: u64,
+}
+
+/// Cloud policy response from GET /v1/policy/{org_id}.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyResponse {
+    pub version: i64,
+    pub rules: crate::config::RulesConfig,
+}
+
+/// Background task that polls the cloud for policy updates and hot-reloads
+/// the proxy's PolicyEngine when a new version is available.
+pub struct PolicySyncer {
+    config: PolicySyncConfig,
+    policy_engine: std::sync::Arc<crate::policy::PolicyEngine>,
+    http_client: reqwest::Client,
+    shutdown_rx: watch::Receiver<bool>,
+    current_version: i64,
+}
+
+impl PolicySyncer {
+    pub fn new(
+        config: PolicySyncConfig,
+        policy_engine: std::sync::Arc<crate::policy::PolicyEngine>,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            config,
+            policy_engine,
+            http_client: reqwest::Client::new(),
+            shutdown_rx,
+            current_version: 0,
+        }
+    }
+
+    /// Spawn the policy sync loop as a background tokio task.
+    pub fn spawn(self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            if let Err(e) = self.run().await {
+                tracing::error!(error = %e, "Policy syncer exited with error");
+            }
+        })
+    }
+
+    async fn run(mut self) -> Result<()> {
+        tracing::info!(
+            endpoint = self.config.policy_endpoint,
+            interval_secs = self.config.interval_secs,
+            "Policy sync started"
+        );
+
+        loop {
+            if *self.shutdown_rx.borrow() {
+                tracing::info!("Policy syncer shutting down");
+                break;
+            }
+
+            match self.poll_policy().await {
+                Ok(true) => {
+                    // Policy was updated — logged inside poll_policy.
+                }
+                Ok(false) => {
+                    // No update needed.
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Policy sync poll failed");
+                }
+            }
+
+            let wait = tokio::time::Duration::from_secs(self.config.interval_secs);
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = self.shutdown_rx.changed() => break,
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Poll the cloud for the current policy. Returns true if the policy was updated.
+    async fn poll_policy(&mut self) -> Result<bool> {
+        let mut req = self
+            .http_client
+            .get(&self.config.policy_endpoint);
+
+        if let Some(api_key) = &self.config.api_key {
+            req = req.header("Authorization", format!("Bearer {}", api_key));
+        }
+
+        let resp = req.send().await.context("Failed to poll policy")?;
+        let status = resp.status();
+
+        if !status.is_success() {
+            anyhow::bail!("Policy endpoint returned {}", status.as_u16());
+        }
+
+        let policy_resp: PolicyResponse = resp
+            .json()
+            .await
+            .context("Failed to parse policy response")?;
+
+        if policy_resp.version > self.current_version {
+            tracing::info!(
+                old_version = self.current_version,
+                new_version = policy_resp.version,
+                "Cloud policy updated — applying new rules"
+            );
+            self.policy_engine.update_rules(policy_resp.rules);
+            self.current_version = policy_resp.version;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
 /// Convenience: build a SyncConfig from the ProxyConfig's ledger section.
 /// Returns None if cloud_endpoint is not configured.
 pub fn sync_config_from_ledger(

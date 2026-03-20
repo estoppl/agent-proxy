@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use crate::config::RulesConfig;
@@ -58,17 +58,26 @@ impl RateTracker {
 }
 
 /// Rules-based policy engine with rate limiting.
+///
+/// Rules are wrapped in `Arc<RwLock<>>` so the cloud policy syncer can
+/// hot-reload them without restarting the proxy.
 pub struct PolicyEngine {
-    rules: RulesConfig,
+    rules: Arc<RwLock<RulesConfig>>,
     rate_tracker: Mutex<RateTracker>,
 }
 
 impl PolicyEngine {
     pub fn new(rules: RulesConfig) -> Self {
         Self {
-            rules,
+            rules: Arc::new(RwLock::new(rules)),
             rate_tracker: Mutex::new(RateTracker::new()),
         }
+    }
+
+    /// Replace the current rules with new ones from the cloud.
+    pub fn update_rules(&self, new_rules: RulesConfig) {
+        let mut rules = self.rules.write().unwrap();
+        *rules = new_rules;
     }
 
     /// Evaluate a tool call against the configured rules.
@@ -81,9 +90,10 @@ impl PolicyEngine {
     /// 5. Rate limits
     /// 6. Default: allow
     pub fn evaluate(&self, tool_call: &ToolCallParams) -> PolicyDecision {
+        let rules = self.rules.read().unwrap();
+
         // Check explicit block list first (highest priority).
-        if self
-            .rules
+        if rules
             .block_tools
             .iter()
             .any(|t| tool_matches(&tool_call.name, t))
@@ -94,9 +104,8 @@ impl PolicyEngine {
         }
 
         // Check allow list — if non-empty, only listed tools pass through.
-        if !self.rules.allow_tools.is_empty()
-            && !self
-                .rules
+        if !rules.allow_tools.is_empty()
+            && !rules
                 .allow_tools
                 .iter()
                 .any(|t| tool_matches(&tool_call.name, t))
@@ -107,8 +116,7 @@ impl PolicyEngine {
         }
 
         // Check human review list.
-        if self
-            .rules
+        if rules
             .human_review_tools
             .iter()
             .any(|t| tool_matches(&tool_call.name, t))
@@ -119,14 +127,17 @@ impl PolicyEngine {
         }
 
         // Check amount threshold.
-        if let Some(max_amount) = self.rules.max_amount_usd
-            && let Some(amount) = extract_amount(&tool_call.arguments, &self.rules.amount_field)
+        if let Some(max_amount) = rules.max_amount_usd
+            && let Some(amount) = extract_amount(&tool_call.arguments, &rules.amount_field)
             && amount > max_amount
         {
             return PolicyDecision::Block {
                 rule: format!("max_amount_usd:{}>{}", amount, max_amount),
             };
         }
+
+        // Drop the read lock before acquiring the mutex for rate limiting.
+        drop(rules);
 
         // Check rate limits.
         if let Some(decision) = self.check_rate_limit(&tool_call.name) {
@@ -137,13 +148,14 @@ impl PolicyEngine {
     }
 
     fn check_rate_limit(&self, tool_name: &str) -> Option<PolicyDecision> {
+        let rules = self.rules.read().unwrap();
         // Determine the applicable limit: tool-specific override > global default.
-        let limit = self
-            .rules
+        let limit = rules
             .rate_limit_tools
             .get(tool_name)
             .copied()
-            .or(self.rules.rate_limit_per_minute);
+            .or(rules.rate_limit_per_minute);
+        drop(rules);
 
         let limit = match limit {
             Some(l) if l > 0 => l,

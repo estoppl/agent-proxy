@@ -114,6 +114,9 @@ rate_limit_per_minute = 30
 
 [ledger]
 db_path = ".estoppl/events.db"
+# cloud_endpoint = "https://api.estoppl.ai/v1/events"
+# cloud_api_key = "sk_your_key"
+# org_id = "your-org-id"
 ```
 
 ### How guardrails work
@@ -203,6 +206,17 @@ estoppl start --upstream-cmd npx --upstream-args @stripe/mcp-server --sync
 
 Events always persist locally first. Cloud sync is best-effort with exponential backoff, gap detection, and automatic reconciliation. See [ARCHITECTURE.md](ARCHITECTURE.md) for details on chain integrity under network partitions.
 
+### Remote kill switch
+
+When `org_id` is configured and `--sync` is enabled, the proxy polls the cloud for policy updates every 5 seconds. If an admin blocks a tool in the cloud dashboard, every proxy in the org picks it up and starts rejecting that tool — no restart required.
+
+```toml
+[ledger]
+cloud_endpoint = "https://api.estoppl.ai/v1/events"
+cloud_api_key = "sk_your_key"
+org_id = "your-org-id"
+```
+
 ## Roadmap
 
 ### Current
@@ -212,11 +226,13 @@ Events always persist locally first. Cloud sync is best-effort with exponential 
 - [x] Local web dashboard + HTML reports
 - [x] `estoppl wrap` — one-command setup for Claude Desktop, Cursor, Windsurf
 - [x] Distribution: Homebrew, npm, Cargo, GitHub Releases
+- [x] **Cloud sync** — stream events to estoppl cloud with chain verification, gap detection, and automatic reconciliation
+- [x] **Remote kill switch** — cloud-managed policy hot-reload, block tools org-wide within seconds
 
 ### Future
 - [ ] **Attestation header** — signed proof of policy evaluation forwarded with each tool call
 - [ ] **Cloud verification API** — API providers verify attestations against the tamper-proof cloud ledger
-- [ ] **Cloud dashboard** — org-wide agent monitoring, alerting, remote kill switch, team access control
+- [ ] **Cloud dashboard** — alerting, compliance export, team access control
 - [ ] **Immutable WORM storage** for regulated industries (SEC 17a-4)
 - [ ] Blocking human review — tools pause until explicit approval
 - [ ] OPA integration for enterprise policy management

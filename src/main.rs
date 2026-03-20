@@ -12,6 +12,7 @@ mod wrap;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
@@ -255,8 +256,11 @@ async fn cmd_start(
         "Estoppl proxy starting"
     );
 
+    let policy_engine = Arc::new(policy_engine);
+
     // Start cloud sync background task if --sync is enabled.
     let _sync_handle = maybe_start_sync(sync_enabled, &config)?;
+    let _policy_handle = maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
 
     proxy::run_stdio_proxy(
         upstream_cmd,
@@ -291,8 +295,11 @@ async fn cmd_start_http(
         "Estoppl HTTP proxy starting"
     );
 
+    let policy_engine = Arc::new(policy_engine);
+
     // Start cloud sync background task if --sync is enabled.
     let _sync_handle = maybe_start_sync(sync_enabled, &config)?;
+    let _policy_handle = maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
 
     proxy::run_http_proxy(
         listen_addr,
@@ -336,6 +343,54 @@ fn maybe_start_sync(
 
     let (_shutdown_tx, shutdown_rx) = sync::shutdown_channel();
     let syncer = sync::CloudSyncer::new(sync_config, config.ledger.db_path.clone(), shutdown_rx);
+    let handle = syncer.spawn();
+
+    Ok(Some(handle))
+}
+
+/// Start the policy sync background task if --sync is enabled and org_id is configured.
+fn maybe_start_policy_sync(
+    sync_enabled: bool,
+    config: &config::ProxyConfig,
+    policy_engine: Arc<policy::PolicyEngine>,
+) -> Result<Option<tokio::task::JoinHandle<()>>> {
+    if !sync_enabled {
+        return Ok(None);
+    }
+
+    let cloud_endpoint = match &config.ledger.cloud_endpoint {
+        Some(ep) if !ep.is_empty() => ep,
+        _ => return Ok(None),
+    };
+
+    let org_id = match &config.ledger.org_id {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            tracing::debug!("Policy sync skipped: no org_id in config");
+            return Ok(None);
+        }
+    };
+
+    // Derive policy endpoint from the events endpoint.
+    // e.g. "http://localhost:8080/v1/events" -> "http://localhost:8080/v1/policy/{org_id}"
+    let base_url = cloud_endpoint
+        .trim_end_matches('/')
+        .rsplit_once("/v1/")
+        .map(|(base, _)| format!("{}/v1", base))
+        .unwrap_or_else(|| cloud_endpoint.trim_end_matches('/').to_string());
+
+    let policy_endpoint = format!("{}/policy/{}", base_url, org_id);
+
+    let policy_config = sync::PolicySyncConfig {
+        policy_endpoint: policy_endpoint.clone(),
+        api_key: config.ledger.cloud_api_key.clone(),
+        interval_secs: 5,
+    };
+
+    tracing::info!(endpoint = policy_endpoint, "Policy sync enabled");
+
+    let (_shutdown_tx, shutdown_rx) = sync::shutdown_channel();
+    let syncer = sync::PolicySyncer::new(policy_config, policy_engine, shutdown_rx);
     let handle = syncer.spawn();
 
     Ok(Some(handle))
