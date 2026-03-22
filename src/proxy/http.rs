@@ -34,6 +34,8 @@ struct ProxyState {
     key_manager: KeyManager,
     ledger: Mutex<LocalLedger>,
     policy: Arc<PolicyEngine>,
+    #[allow(dead_code)] // Will be used when HTTP proxy review handling is wired up
+    review_client: Option<Arc<crate::review::ReviewClient>>,
     http_client: reqwest::Client,
 }
 
@@ -81,6 +83,7 @@ pub async fn run_http_proxy(
     key_manager: KeyManager,
     ledger: LocalLedger,
     policy: Arc<PolicyEngine>,
+    review_client: Option<Arc<crate::review::ReviewClient>>,
 ) -> Result<()> {
     let session_id = Uuid::now_v7().to_string();
 
@@ -101,6 +104,7 @@ pub async fn run_http_proxy(
         key_manager,
         ledger: Mutex::new(ledger),
         policy,
+        review_client,
         http_client: reqwest::Client::new(),
     });
 

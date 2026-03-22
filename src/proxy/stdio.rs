@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
@@ -9,6 +13,7 @@ use crate::identity::KeyManager;
 use crate::ledger::{LocalLedger, sha256_hex};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse};
 use crate::policy::{PolicyDecision, PolicyEngine};
+use crate::review::{ReviewClient, ReviewOutcome};
 
 /// Tracks an in-flight tools/call request so we can log the response too.
 struct PendingCall {
@@ -30,6 +35,7 @@ pub async fn run_stdio_proxy(
     key_manager: &KeyManager,
     ledger: &LocalLedger,
     policy: &PolicyEngine,
+    review_client: Option<Arc<ReviewClient>>,
 ) -> Result<()> {
     let session_id = Uuid::now_v7().to_string();
 
@@ -76,6 +82,15 @@ pub async fn run_stdio_proxy(
     let mut upstream_line = String::new();
 
     let mut stdin_closed = false;
+
+    // Track in-flight human review waits.
+    type ReviewFuture = std::pin::Pin<Box<dyn std::future::Future<Output = (
+        Result<ReviewOutcome>,
+        String, // held_request
+        Option<serde_json::Value>, // req_id
+        String, // tool_name
+    )> + Send>>;
+    let mut review_futures: FuturesUnordered<ReviewFuture> = FuturesUnordered::new();
 
     loop {
         // If stdin is closed and no pending calls, we're done.
@@ -161,9 +176,66 @@ pub async fn run_stdio_proxy(
                             host_line.clear();
                             continue;
                         }
+                        PolicyDecision::HumanRequired { .. } if review_client.is_some() => {
+                            // Hold the call — don't forward until human approves.
+                            let event_id = super::log_event(
+                                ledger,
+                                key_manager,
+                                &session_id,
+                                agent_id,
+                                agent_version,
+                                authorized_by,
+                                &tool_name,
+                                "stdio",
+                                &input_hash,
+                                "",
+                                &decision,
+                                0,
+                            )?;
+
+                            tracing::info!(
+                                tool = tool_name,
+                                event_id = event_id,
+                                "Holding tool call for human review"
+                            );
+
+                            let rc = Arc::clone(review_client.as_ref().unwrap());
+                            let held_request = host_line.clone();
+                            let req_id = req.id.clone();
+                            let tn = tool_name.clone();
+                            let ih = input_hash.clone();
+                            let aid = agent_id.to_string();
+                            let pkid = key_manager.key_id.clone();
+
+                            review_futures.push(Box::pin(async move {
+                                // Submit review request to cloud
+                                if let Err(e) = rc.submit_review(
+                                    &event_id, &tn, &aid, &ih, &pkid, 300,
+                                ).await {
+                                    tracing::warn!(error = %e, "Failed to submit review");
+                                }
+
+                                // Wait for decision
+                                let outcome = rc.wait_for_decision(
+                                    &event_id,
+                                    Duration::from_secs(295), // slightly less than cloud's 300s
+                                    Duration::from_secs(2),
+                                ).await;
+
+                                (outcome, held_request, req_id, tn)
+                            }));
+
+                            host_line.clear();
+                            continue;
+                        }
                         _ => {
-                            // ALLOW or HUMAN_REQUIRED — log immediately at interception,
-                            // then forward to upstream and track for latency update.
+                            // ALLOW (or HUMAN_REQUIRED without review client) — log and forward.
+                            if matches!(&decision, PolicyDecision::HumanRequired { .. }) {
+                                tracing::warn!(
+                                    "HUMAN_REQUIRED but --sync not enabled; forwarding without review"
+                                );
+                            }
+
                             let _event_id = super::log_event(
                                 ledger,
                                 key_manager,
@@ -231,6 +303,49 @@ pub async fn run_stdio_proxy(
                 host_stdout.write_all(upstream_line.as_bytes()).await?;
                 host_stdout.flush().await?;
                 upstream_line.clear();
+            }
+
+            // Check for completed human review decisions.
+            Some((outcome, held_request, req_id, tool_name)) = review_futures.next() => {
+                match outcome {
+                    Ok(ReviewOutcome::Approved) => {
+                        tracing::info!(tool = tool_name, "Human review APPROVED — forwarding");
+                        if let Some(ref mut stdin) = child_stdin {
+                            stdin.write_all(held_request.as_bytes()).await?;
+                            stdin.flush().await?;
+                        }
+                        let req_id_key = req_id.map(|v| v.to_string()).unwrap_or_default();
+                        pending.insert(req_id_key, PendingCall {
+                            tool_name,
+                            start: std::time::Instant::now(),
+                        });
+                    }
+                    Ok(outcome) => {
+                        let reason = match outcome {
+                            ReviewOutcome::Denied => "Denied by human review",
+                            ReviewOutcome::Expired => "Human review timed out",
+                            _ => unreachable!(),
+                        };
+                        tracing::info!(tool = tool_name, reason = reason, "Human review rejected");
+                        let err_resp = JsonRpcResponse::error(
+                            req_id, -32001, reason.to_string(),
+                        );
+                        let err_json = serde_json::to_string(&err_resp)?;
+                        host_stdout.write_all(err_json.as_bytes()).await?;
+                        host_stdout.write_all(b"\n").await?;
+                        host_stdout.flush().await?;
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, tool = tool_name, "Review polling failed — denying");
+                        let err_resp = JsonRpcResponse::error(
+                            req_id, -32001, "Human review unavailable".to_string(),
+                        );
+                        let err_json = serde_json::to_string(&err_resp)?;
+                        host_stdout.write_all(err_json.as_bytes()).await?;
+                        host_stdout.write_all(b"\n").await?;
+                        host_stdout.flush().await?;
+                    }
+                }
             }
 
             // Wait for child process to exit.

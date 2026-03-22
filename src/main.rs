@@ -6,6 +6,7 @@ mod mcp;
 mod policy;
 mod proxy;
 mod report;
+mod review;
 mod sync;
 mod wrap;
 
@@ -263,6 +264,9 @@ async fn cmd_start(
     let _policy_handle =
         maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
 
+    // Create review client if cloud sync is enabled.
+    let review_client = maybe_create_review_client(sync_enabled, &config);
+
     proxy::run_stdio_proxy(
         upstream_cmd,
         upstream_args,
@@ -272,6 +276,7 @@ async fn cmd_start(
         &key_manager,
         &db_ledger,
         &policy_engine,
+        review_client.clone(),
     )
     .await
 }
@@ -303,6 +308,9 @@ async fn cmd_start_http(
     let _policy_handle =
         maybe_start_policy_sync(sync_enabled, &config, Arc::clone(&policy_engine))?;
 
+    // Create review client if cloud sync is enabled.
+    let review_client = maybe_create_review_client(sync_enabled, &config);
+
     proxy::run_http_proxy(
         listen_addr,
         upstream_url,
@@ -312,8 +320,36 @@ async fn cmd_start_http(
         key_manager,
         db_ledger,
         policy_engine,
+        review_client,
     )
     .await
+}
+
+/// Create a ReviewClient if cloud sync is enabled.
+fn maybe_create_review_client(
+    sync_enabled: bool,
+    config: &config::ProxyConfig,
+) -> Option<Arc<review::ReviewClient>> {
+    if !sync_enabled {
+        return None;
+    }
+
+    let cloud_endpoint = config.ledger.cloud_endpoint.as_deref()?;
+    if cloud_endpoint.is_empty() {
+        return None;
+    }
+
+    // Derive base URL from events endpoint
+    let base_url = cloud_endpoint
+        .trim_end_matches('/')
+        .rsplit_once("/v1/")
+        .map(|(base, _)| base.to_string())
+        .unwrap_or_else(|| cloud_endpoint.trim_end_matches('/').to_string());
+
+    Some(Arc::new(review::ReviewClient::new(
+        base_url,
+        config.ledger.cloud_api_key.clone(),
+    )))
 }
 
 /// Start the cloud sync background task if --sync is enabled and cloud_endpoint is configured.
