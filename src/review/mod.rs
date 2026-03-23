@@ -90,16 +90,18 @@ impl ReviewClient {
         Ok(body.status)
     }
 
-    /// Send output_data to the cloud for an event that already synced.
+    /// Send output_data and actual latency to the cloud for an event that already synced.
     pub async fn update_event_output(
         &self,
         event_id: &str,
         output_data: Option<serde_json::Value>,
+        actual_latency_ms: Option<i64>,
     ) -> Result<()> {
         let url = format!("{}/v1/events/{}/output", self.base_url, event_id);
 
         let payload = serde_json::json!({
             "output_data": output_data,
+            "actual_latency_ms": actual_latency_ms,
         });
 
         let mut req = self

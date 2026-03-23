@@ -325,14 +325,19 @@ pub async fn run_stdio_proxy(
                             tracing::warn!(error = %e, "Failed to update local event with response");
                         }
 
-                        // Send output_data to cloud
+                        // Send output_data + latency to cloud
                         if let Some(ref rc) = review_client {
                             let eid = call.event_id.clone();
                             let rc = Arc::clone(rc);
                             let out = output.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = rc.update_event_output(&eid, out).await {
-                                    tracing::warn!(error = %e, "Failed to sync response to cloud");
+                                if let Err(e) =
+                                    rc.update_event_output(&eid, out, Some(latency_ms)).await
+                                {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "Failed to sync response to cloud"
+                                    );
                                 }
                             });
                         }
