@@ -169,6 +169,7 @@ estoppl start-http --upstream-url https://mcp.stripe.com/v1
 | `estoppl tail` | Live-stream tool calls as they happen |
 | `estoppl stats` | Tool call volume, latency, per-tool breakdown |
 | `estoppl dashboard` | Local web dashboard at http://127.0.0.1:4200 |
+| `estoppl bench` | Measure proxy overhead (p50/p95/p99 latency vs direct) |
 | `estoppl report` | Generate HTML activity report |
 
 ## How it works under the hood

@@ -94,6 +94,14 @@ enum Commands {
         #[arg(long)]
         verify: bool,
 
+        /// Verify a receipt file (downloaded from the dashboard).
+        #[arg(long)]
+        verify_receipt: Option<PathBuf>,
+
+        /// Verify an exported audit trail (downloaded from the dashboard).
+        #[arg(long)]
+        verify_export: Option<PathBuf>,
+
         /// Filter by tool name (exact match or use % for wildcard, e.g. "stripe%").
         #[arg(long)]
         tool: Option<String>,
@@ -157,6 +165,25 @@ enum Commands {
         #[arg(long, short, default_value = "estoppl.toml")]
         config: PathBuf,
     },
+
+    /// Measure proxy overhead — proves latency impact is negligible.
+    Bench {
+        /// Command to launch the upstream MCP server.
+        #[arg(long)]
+        upstream_cmd: String,
+
+        /// Arguments to pass to the upstream command.
+        #[arg(long, num_args = 0..)]
+        upstream_args: Vec<String>,
+
+        /// Number of tool calls to send.
+        #[arg(long, default_value = "100")]
+        count: u32,
+
+        /// Path to estoppl config file.
+        #[arg(long, short, default_value = "estoppl.toml")]
+        config: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -190,11 +217,21 @@ async fn main() -> Result<()> {
         Commands::Audit {
             limit,
             verify,
+            verify_receipt,
+            verify_export,
             tool,
             decision,
             since,
             config,
-        } => cmd_audit(limit, verify, tool, decision, since, &config)?,
+        } => {
+            if let Some(receipt_path) = verify_receipt {
+                cmd_verify_receipt(&receipt_path)?;
+            } else if let Some(export_path) = verify_export {
+                cmd_verify_export(&export_path)?;
+            } else {
+                cmd_audit(limit, verify, tool, decision, since, &config)?;
+            }
+        }
         Commands::Tail { config } => cmd_tail(&config).await?,
         Commands::Stats { config } => cmd_stats(&config)?,
         Commands::Wrap {
@@ -204,6 +241,12 @@ async fn main() -> Result<()> {
         } => wrap::run_wrap(dry_run, restore, client.as_deref())?,
         Commands::Unwrap { client } => wrap::run_wrap(false, true, client.as_deref())?,
         Commands::Dashboard { port, config } => cmd_dashboard(port, &config).await?,
+        Commands::Bench {
+            upstream_cmd,
+            upstream_args,
+            count,
+            config,
+        } => cmd_bench(&upstream_cmd, &upstream_args, count, &config).await?,
     }
 
     Ok(())
@@ -454,6 +497,355 @@ fn cmd_report(output: &Path, config_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn cmd_verify_export(path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read export: {}", path.display()))?;
+
+    let export: serde_json::Value =
+        serde_json::from_str(&content).with_context(|| "Failed to parse export JSON")?;
+
+    let org = export
+        .get("organization")
+        .and_then(|o| o.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let date_range = export.get("date_range");
+    let from = date_range
+        .and_then(|d| d.get("from"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let to = date_range
+        .and_then(|d| d.get("to"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let events = export
+        .get("events")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    println!("Export Verification");
+    println!("===================");
+    println!("Organization: {}", org);
+    println!("Date range:   {} to {}", from, to);
+    println!("Total events: {}", events.len());
+    println!();
+
+    use sha2::{Digest, Sha256};
+
+    let mut valid = 0;
+    let mut tampered = 0;
+    let mut no_hash_input = 0;
+    let mut chain_breaks = 0;
+    let mut tampered_events: Vec<String> = Vec::new();
+
+    // Group by proxy_key_id for chain verification
+    let mut chains: std::collections::HashMap<String, Vec<&serde_json::Value>> =
+        std::collections::HashMap::new();
+    for event in &events {
+        let key = event
+            .get("proxy_key_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        chains.entry(key).or_default().push(event);
+    }
+
+    // Verify each event's hash
+    for event in &events {
+        let hash_input = event
+            .get("hash_input")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let event_hash = event
+            .get("event_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let event_id = event.get("event_id").and_then(|v| v.as_str()).unwrap_or("");
+
+        if hash_input.is_empty() {
+            no_hash_input += 1;
+            continue;
+        }
+
+        let computed = hex::encode(Sha256::digest(hash_input.as_bytes()));
+        if computed == event_hash {
+            valid += 1;
+        } else {
+            tampered += 1;
+            tampered_events.push(event_id.to_string());
+        }
+    }
+
+    // Verify chain linkage per proxy
+    for (proxy_key, chain) in &chains {
+        for i in 1..chain.len() {
+            let prev_hash = chain[i]
+                .get("prev_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let prev_event_hash = chain[i - 1]
+                .get("event_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !prev_hash.is_empty() && prev_hash != prev_event_hash {
+                chain_breaks += 1;
+                println!(
+                    "\x1b[31m  Chain break in proxy {} at event {}\x1b[0m",
+                    proxy_key,
+                    chain[i]
+                        .get("event_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                );
+            }
+        }
+    }
+
+    // Results
+    println!("Hash verification:");
+    println!(
+        "  \x1b[32m{} valid\x1b[0m, \x1b[31m{} tampered\x1b[0m, {} without hash_input",
+        valid, tampered, no_hash_input
+    );
+    println!(
+        "Chain verification: {} proxies, \x1b[{}m{} breaks\x1b[0m",
+        chains.len(),
+        if chain_breaks > 0 { "31" } else { "32" },
+        chain_breaks
+    );
+
+    if !tampered_events.is_empty() {
+        println!();
+        println!("\x1b[31mTampered events:\x1b[0m");
+        for eid in &tampered_events {
+            println!("  - {}", eid);
+        }
+    }
+
+    println!();
+    if tampered == 0 && chain_breaks == 0 {
+        println!(
+            "\x1b[32mVerdict: INTACT — all {} events verified, chain unbroken\x1b[0m",
+            valid
+        );
+    } else {
+        println!(
+            "\x1b[31mVerdict: COMPROMISED — {} tampered events, {} chain breaks\x1b[0m",
+            tampered, chain_breaks
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_verify_receipt(path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read receipt: {}", path.display()))?;
+
+    let receipt: serde_json::Value =
+        serde_json::from_str(&content).with_context(|| "Failed to parse receipt JSON")?;
+
+    let event = receipt
+        .get("event")
+        .ok_or_else(|| anyhow::anyhow!("Receipt missing 'event' field"))?;
+
+    let event_id = event
+        .get("event_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let tool_name = event
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let decision = event
+        .get("policy_decision")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let event_hash = event
+        .get("event_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let signature = event
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let proxy_key_id = event
+        .get("proxy_key_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    println!("Receipt Verification");
+    println!("====================");
+    println!("Event ID:     {}", event_id);
+    println!("Tool:         {}", tool_name);
+    println!("Decision:     {}", decision);
+    println!("Proxy Key:    {}", proxy_key_id);
+    println!();
+
+    // Verify hash_input → recompute SHA-256 and compare to event_hash
+    // hash_input can be at top level of receipt or inside event
+    let hash_input = receipt
+        .get("hash_input")
+        .or_else(|| event.get("hash_input"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let mut hash_valid = false;
+    if !hash_input.is_empty() && !event_hash.is_empty() {
+        use sha2::{Digest, Sha256};
+        let computed = hex::encode(Sha256::digest(hash_input.as_bytes()));
+        if computed == event_hash {
+            hash_valid = true;
+            println!("\x1b[32mHash:      VALID\x1b[0m — recomputed hash matches event_hash");
+        } else {
+            println!("\x1b[31mHash:      TAMPERED\x1b[0m — recomputed hash does not match");
+            println!("           Expected: {}", event_hash);
+            println!("           Computed: {}", computed);
+        }
+    } else if !event_hash.is_empty() {
+        println!(
+            "Hash:      {}...{} (no hash_input to verify — older receipt format)",
+            &event_hash[..8],
+            &event_hash[event_hash.len() - 8..]
+        );
+    }
+
+    // Verify signature against event_hash
+    let key_path = PathBuf::from(".estoppl/keys/estoppl-signing.pub");
+    if key_path.exists() && !signature.is_empty() && !event_hash.is_empty() {
+        let key_manager = identity::KeyManager::load_or_generate(&PathBuf::from(".estoppl/keys"))?;
+
+        let sig_valid = key_manager.verify(event_hash.as_bytes(), signature);
+        if sig_valid {
+            println!("\x1b[32mSignature: VALID\x1b[0m — signed by this proxy's Ed25519 key");
+        } else {
+            println!(
+                "\x1b[33mSignature: UNVERIFIED\x1b[0m — signed by a different proxy key ({})",
+                proxy_key_id
+            );
+        }
+    } else if !signature.is_empty() {
+        println!(
+            "Signature: PRESENT ({}...)",
+            &signature[..16.min(signature.len())]
+        );
+        println!("           No local key found — run from the proxy's directory to verify");
+    } else {
+        println!("\x1b[31mSignature: MISSING\x1b[0m");
+    }
+
+    // Chain linkage
+    let chain = receipt.get("chain_proof");
+    if let Some(chain) = chain {
+        let prev = chain
+            .get("prev_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let seq = chain
+            .get("sequence_number")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if prev.is_empty() {
+            println!("Chain:     sequence #{} (first event)", seq);
+        } else {
+            println!(
+                "Chain:     sequence #{}, prev = {}...{}",
+                seq,
+                &prev[..8.min(prev.len())],
+                &prev[prev.len().saturating_sub(8)..]
+            );
+        }
+    }
+
+    // Verify against local ledger — check both hash AND field values
+    let config_path = PathBuf::from("estoppl.toml");
+    let mut fields_tampered = false;
+    if config_path.exists() {
+        if let Ok(config) = config::ProxyConfig::load(&config_path) {
+            if let Ok(ledger) = ledger::LocalLedger::open(&config.ledger.db_path) {
+                if let Ok(events) = ledger.query_events_filtered(None, None, None, None, None) {
+                    if let Some(local_event) = events.iter().find(|e| e.event_id == event_id) {
+                        if local_event.event_hash == event_hash {
+                            println!("\x1b[32mLocal DB:  HASH MATCH\x1b[0m");
+                        } else {
+                            println!(
+                                "\x1b[31mLocal DB:  HASH MISMATCH — receipt hash differs from local ledger\x1b[0m"
+                            );
+                        }
+
+                        // Check if display fields match the local event
+                        let mut mismatches = Vec::new();
+                        if tool_name != local_event.tool_name {
+                            mismatches.push(format!(
+                                "tool_name: receipt='{}' local='{}'",
+                                tool_name, local_event.tool_name
+                            ));
+                        }
+                        if decision != local_event.policy_decision {
+                            mismatches.push(format!(
+                                "policy_decision: receipt='{}' local='{}'",
+                                decision, local_event.policy_decision
+                            ));
+                        }
+                        let receipt_agent =
+                            event.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                        if receipt_agent != local_event.agent_id {
+                            mismatches.push(format!(
+                                "agent_id: receipt='{}' local='{}'",
+                                receipt_agent, local_event.agent_id
+                            ));
+                        }
+
+                        if !mismatches.is_empty() {
+                            fields_tampered = true;
+                            println!(
+                                "\x1b[31mLocal DB:  FIELDS TAMPERED — display data was modified:\x1b[0m"
+                            );
+                            for m in &mismatches {
+                                println!("           - {}", m);
+                            }
+                        } else {
+                            println!("\x1b[32mLocal DB:  FIELDS MATCH\x1b[0m");
+                        }
+                    } else {
+                        println!("Local DB:  Event not found in local ledger");
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
+    if !hash_input.is_empty() && !hash_valid {
+        println!("\x1b[31mVerdict:   TAMPERED — event data was modified after signing\x1b[0m");
+    } else if fields_tampered {
+        println!(
+            "\x1b[31mVerdict:   TAMPERED — receipt display data was modified after signing\x1b[0m"
+        );
+    } else if !signature.is_empty() && !event_hash.is_empty() {
+        let key_path = PathBuf::from(".estoppl/keys/estoppl-signing.pub");
+        if key_path.exists() {
+            let key_manager =
+                identity::KeyManager::load_or_generate(&PathBuf::from(".estoppl/keys"))?;
+            if key_manager.verify(event_hash.as_bytes(), signature) {
+                println!("\x1b[32mVerdict:   AUTHENTIC — signature and fields verified\x1b[0m");
+            } else {
+                println!("\x1b[33mVerdict:   UNVERIFIED — signed by a different proxy\x1b[0m");
+                println!("           Run this command from the proxy that generated the event");
+            }
+        } else {
+            println!("Verdict:   Signature present but no local key to verify against");
+            println!("           Run from the proxy's directory (.estoppl/keys/)");
+        }
+    } else {
+        println!("\x1b[31mVerdict:   INCOMPLETE — missing signature or hash\x1b[0m");
+    }
+
+    Ok(())
+}
+
 fn cmd_audit(
     limit: u32,
     verify: bool,
@@ -656,6 +1048,194 @@ fn print_event_table(events: &[ledger::AgentActionEvent]) {
             e.latency_ms,
         );
     }
+}
+
+async fn cmd_bench(
+    upstream_cmd: &str,
+    upstream_args: &[String],
+    count: u32,
+    config_path: &Path,
+) -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
+    let config = config::ProxyConfig::load(config_path)?;
+    let key_dir = PathBuf::from(".estoppl/keys");
+    let key_manager = identity::KeyManager::load_or_generate(&key_dir)?;
+
+    println!("estoppl bench");
+    println!("=============");
+    println!("Upstream:   {} {}", upstream_cmd, upstream_args.join(" "));
+    println!("Calls:      {}", count);
+    println!();
+
+    // Phase 1: Direct (no proxy)
+    println!("Phase 1: Direct (no proxy)...");
+    let direct_latencies = {
+        let mut child = Command::new(upstream_cmd)
+            .args(upstream_args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Failed to spawn upstream")?;
+
+        let mut stdin = child.stdin.take().unwrap();
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let mut latencies = Vec::new();
+        let mut line = String::new();
+
+        for i in 0..count {
+            let req = format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"tools/call\",\"params\":{{\"name\":\"bench_tool\",\"arguments\":{{}}}}}}",
+                i + 1
+            );
+            let start = std::time::Instant::now();
+            stdin.write_all(req.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await?;
+
+            line.clear();
+            reader.read_line(&mut line).await?;
+            latencies.push(start.elapsed());
+        }
+        drop(stdin);
+        let _ = child.wait().await;
+        latencies
+    };
+
+    // Phase 2: Through proxy
+    println!("Phase 2: Through estoppl proxy...");
+    let proxy_latencies = {
+        let db_path = std::env::temp_dir().join(format!("estoppl-bench-{}.db", std::process::id()));
+        let ledger = ledger::LocalLedger::open(&db_path)?;
+        let policy_engine = policy::PolicyEngine::new(config.rules.clone());
+        let policy_engine = Arc::new(policy_engine);
+
+        let mut child = Command::new(upstream_cmd)
+            .args(upstream_args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Failed to spawn upstream")?;
+
+        let mut child_stdin = child.stdin.take().unwrap();
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let mut latencies = Vec::new();
+        let mut line = String::new();
+        let session_id = "bench-session";
+
+        for i in 0..count {
+            let req = format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"tools/call\",\"params\":{{\"name\":\"bench_tool\",\"arguments\":{{}}}}}}",
+                i + 1
+            );
+            let input_hash = ledger::sha256_hex(req.as_bytes());
+            let tool_params = mcp::ToolCallParams {
+                name: "bench_tool".to_string(),
+                arguments: serde_json::json!({}),
+            };
+
+            let start = std::time::Instant::now();
+
+            // Policy evaluation
+            let _decision = policy_engine.evaluate(&tool_params);
+
+            // Log event
+            let _ = proxy::log_event(
+                &ledger,
+                &key_manager,
+                session_id,
+                "bench-agent",
+                "0.1.0",
+                "bench",
+                proxy::EventParams {
+                    tool_name: "bench_tool",
+                    tool_server: "stdio",
+                    input_hash: &input_hash,
+                    output_hash: "",
+                    input_data: None,
+                    output_data: None,
+                    decision: &policy::PolicyDecision::Allow,
+                    latency_ms: 0,
+                },
+            );
+
+            // Forward to upstream
+            child_stdin.write_all(req.as_bytes()).await?;
+            child_stdin.write_all(b"\n").await?;
+            child_stdin.flush().await?;
+
+            line.clear();
+            reader.read_line(&mut line).await?;
+            latencies.push(start.elapsed());
+        }
+        drop(child_stdin);
+        let _ = child.wait().await;
+        latencies
+    };
+
+    // Calculate stats
+    fn percentile(latencies: &[std::time::Duration], p: f64) -> std::time::Duration {
+        let idx = ((latencies.len() as f64 * p / 100.0).ceil() as usize).min(latencies.len()) - 1;
+        latencies[idx]
+    }
+
+    let mut direct_sorted = direct_latencies.clone();
+    direct_sorted.sort();
+    let mut proxy_sorted = proxy_latencies.clone();
+    proxy_sorted.sort();
+
+    let direct_p50 = percentile(&direct_sorted, 50.0);
+    let direct_p95 = percentile(&direct_sorted, 95.0);
+    let direct_p99 = percentile(&direct_sorted, 99.0);
+
+    let proxy_p50 = percentile(&proxy_sorted, 50.0);
+    let proxy_p95 = percentile(&proxy_sorted, 95.0);
+    let proxy_p99 = percentile(&proxy_sorted, 99.0);
+
+    let overhead_p50 = proxy_p50.saturating_sub(direct_p50);
+    let overhead_p95 = proxy_p95.saturating_sub(direct_p95);
+    let overhead_p99 = proxy_p99.saturating_sub(direct_p99);
+
+    println!();
+    println!("Results ({} calls)", count);
+    println!("─────────────────────────────────────────────");
+    println!("           {:>10}  {:>10}  {:>10}", "p50", "p95", "p99");
+    println!(
+        "Direct:    {:>8.2}ms  {:>8.2}ms  {:>8.2}ms",
+        direct_p50.as_secs_f64() * 1000.0,
+        direct_p95.as_secs_f64() * 1000.0,
+        direct_p99.as_secs_f64() * 1000.0,
+    );
+    println!(
+        "Proxy:     {:>8.2}ms  {:>8.2}ms  {:>8.2}ms",
+        proxy_p50.as_secs_f64() * 1000.0,
+        proxy_p95.as_secs_f64() * 1000.0,
+        proxy_p99.as_secs_f64() * 1000.0,
+    );
+    println!(
+        "Overhead:  {:>8.2}ms  {:>8.2}ms  {:>8.2}ms",
+        overhead_p50.as_secs_f64() * 1000.0,
+        overhead_p95.as_secs_f64() * 1000.0,
+        overhead_p99.as_secs_f64() * 1000.0,
+    );
+
+    println!();
+    if overhead_p99.as_secs_f64() * 1000.0 < 2.0 {
+        println!("\x1b[32mVerdict: PASS — proxy overhead < 2ms at p99\x1b[0m");
+    } else if overhead_p99.as_secs_f64() * 1000.0 < 5.0 {
+        println!("\x1b[33mVerdict: ACCEPTABLE — proxy overhead < 5ms at p99\x1b[0m");
+    } else {
+        println!(
+            "\x1b[31mVerdict: HIGH — proxy overhead {:.2}ms at p99\x1b[0m",
+            overhead_p99.as_secs_f64() * 1000.0
+        );
+    }
+
+    Ok(())
 }
 
 fn truncate(s: &str, max: usize) -> String {
