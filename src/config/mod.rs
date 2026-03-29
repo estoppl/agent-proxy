@@ -202,14 +202,13 @@ impl ProxyConfig {
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
 
         // Resolve relative db_path against the config file's directory.
-        if config.ledger.db_path.is_relative() {
-            if let Some(config_dir) = path
+        if config.ledger.db_path.is_relative()
+            && let Some(config_dir) = path
                 .canonicalize()
                 .ok()
                 .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            {
-                config.ledger.db_path = config_dir.join(&config.ledger.db_path);
-            }
+        {
+            config.ledger.db_path = config_dir.join(&config.ledger.db_path);
         }
 
         Ok(config)
