@@ -272,7 +272,7 @@ max_amount_usd = 50000.0
 amount_field = "amount"
 
 # Connect to estoppl cloud (https://app.estoppl.ai)
-# [ledger]
+[ledger]
 # cloud_api_key = "sk_your_key"
 # org_id = "your_org_id"
 "#,
