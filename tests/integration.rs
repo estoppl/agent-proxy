@@ -457,11 +457,7 @@ fn test_wrap_embeds_config_path() {
     let dir = tempfile::TempDir::new().unwrap();
 
     // Create estoppl.toml in the working directory
-    std::fs::write(
-        dir.path().join("estoppl.toml"),
-        "[agent]\nid = \"test\"\n",
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("estoppl.toml"), "[agent]\nid = \"test\"\n").unwrap();
 
     // Create a fake MCP client config
     let fake_home = dir.path().join("fakehome");
