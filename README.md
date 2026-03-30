@@ -98,9 +98,10 @@ id = "my-agent"
 version = "0.1.0"
 
 [rules]
-human_review_tools = ["wire_transfer", "execute_trade"]
-max_amount_usd = 50000.0
-amount_field = "amount"
+block_tools = ["delete_*", "drop_*"]
+# human_review_tools = ["wire_transfer"]
+# max_amount_usd = 50000.0
+# rate_limit_per_minute = 30
 
 # Connect to estoppl cloud (https://app.estoppl.ai)
 [ledger]
@@ -222,7 +223,7 @@ cloud_api_key = "sk_your_key"
 org_id = "your-org-id"
 ```
 
-Sign up at [app.estoppl.ai](https://app.estoppl.ai) or [book a demo](https://calendly.com/tina-estoppl/30min).
+Sign up at [app.estoppl.ai](https://app.estoppl.ai) or reach out at [tina@estoppl.ai](mailto:tina@estoppl.ai).
 
 ## Roadmap
 
@@ -235,10 +236,11 @@ Sign up at [app.estoppl.ai](https://app.estoppl.ai) or [book a demo](https://cal
 - [x] Attestation header (`X-Estoppl-Attestation`) on forwarded HTTP requests
 - [x] Cloud dashboard with real-time monitoring, policy editor, human review
 - [x] Blocking human review — tool calls pause until explicit approval
-- [ ] Cloud verification API — upstream servers verify attestations before processing
-- [ ] Immutable WORM storage for regulated industries (SEC 17a-4)
-- [ ] OPA integration for enterprise policy management
-- [ ] OpenAI function calling + A2A protocol interception
+- [x] Cloud verification API — upstream servers verify attestations via `GET /v1/verify/{id}`
+- [ ] Immutable WORM storage for regulated industries (SEC 17a-4, FINRA 3110)
+- [ ] A2A protocol interception — audit agent-to-agent delegation chains
+- [ ] Agent credential issuance — Ed25519 credentials encoding identity + scope + provenance
+- [ ] Python/TypeScript SDK for non-MCP agent frameworks (LangChain, CrewAI)
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details.
 

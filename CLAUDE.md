@@ -8,14 +8,14 @@ The long-term vision is to become the trust layer for AI agent tool calls — an
 
 This is the OSS layer of a two-layer architecture:
 - **estoppl (this repo)** — open source proxy, installed everywhere, intercepts/logs/attests
-- **estoppl cloud (separate, closed)** — verification API, cloud dashboard (org-wide monitoring, alerting, kill switch), WORM storage for compliance
+- **estoppl cloud (estoppl/api, closed-source)** — verification API, cloud dashboard (org-wide monitoring, policy kill switch, human review, compliance exports), WORM storage
 
 ## Architecture
 
 - **Language**: Rust (tokio async runtime)
 - **Binary name**: `estoppl` (crate name is `estoppl`)
 - **Proxy modes**: stdio intercept + HTTP/SSE reverse proxy (MCP Streamable HTTP transport)
-- **Policy engine**: Simple TOML-configured rules (OPA integration is a future milestone)
+- **Policy engine**: TOML-configured rules locally + cloud-managed JSONB rules (hot-reloaded every 5s). Custom conditional rules, per-agent overrides, wildcards.
 - **Storage**: Local SQLite with WAL mode, hash-chained events
 - **Signing**: Ed25519 via ed25519-dalek
 - **HTTP framework**: axum (for HTTP proxy mode + dashboard)
