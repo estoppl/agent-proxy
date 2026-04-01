@@ -156,7 +156,8 @@ estoppl start-http --upstream-url https://mcp.stripe.com/v1
 | `estoppl init` | Initialize config, keypair, and database |
 | `estoppl start` | Start stdio proxy (wraps a local MCP server) |
 | `estoppl start-http` | Start HTTP proxy (reverse proxy for remote MCP) |
-| `estoppl wrap` | Auto-wrap MCP client configs (Claude, Cursor, Windsurf) |
+| `estoppl wrap` | Auto-wrap MCP client configs (Claude Desktop, Cursor, Windsurf) |
+| `estoppl wrap --client claude` | Wrap only Claude Desktop (also accepts `claude-desktop`) |
 | `estoppl unwrap` | Restore original MCP client configs |
 | `estoppl audit` | View audit log with filters (`--tool`, `--decision`, `--since`) |
 | `estoppl audit --verify` | Verify hash chain integrity |
