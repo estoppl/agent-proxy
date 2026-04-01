@@ -66,6 +66,8 @@ estoppl tail                    # live-stream tool calls as they happen
 
 Restart your MCP client (Cursor, Claude Desktop, etc.) and every tool call now flows through estoppl. The proxy runs as a subprocess — your MCP client starts it automatically via the wrapped config.
 
+[Watch the 2-min demo →](https://youtu.be/6Wq4ADYVy0Y)
+
 ![Estoppl Dashboard](docs/dashboard.png)
 
 ## What the audit log looks like
