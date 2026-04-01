@@ -32,6 +32,7 @@ Real attack vectors estoppl helps defend against:
 - **[Prompt Injection via MCP](https://unit42.paloaltonetworks.com/model-context-protocol-attack-vectors/)** — attackers embed instructions in user-supplied input that trigger automated tool calls. In 2025, this led to [real data exfiltration through Supabase's Cursor agent](https://datasciencedojo.com/blog/mcp-security-risks-and-challenges/).
 - **[Command Injection (CVE-2025-6514)](https://www.practical-devsecops.com/mcp-security-vulnerabilities/)** — malicious MCP servers achieving remote code execution on client machines, affecting 437,000+ installs.
 - **Runaway agents** — an agent in a loop calling Stripe 200 times, or making a $500k wire transfer because the prompt was ambiguous.
+- **LLM tool substitution** — when a tool is blocked, the LLM autonomously finds an alternative tool that returns the same data. We observed this in testing: blocking `list_customers` caused Claude to use `search_stripe_resources` instead, bypassing the block in seconds. The audit trail catches both calls — without estoppl, the workaround is invisible.
 
 Estoppl sits in front of all of this:
 - **Allow/block lists** — only permitted tools reach the server. Everything else is rejected.
